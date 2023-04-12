@@ -48,7 +48,7 @@ def extreme_points(mask, pert=0):
                      find_point(inds_x, inds_y, inds_z, np.where(inds_y >= np.max(inds_y) - pert)),  # max_y
                      find_point(inds_x, inds_y, inds_z, np.where(inds_z <= np.min(inds_z) + pert)),  # min_z
                      find_point(inds_x, inds_y, inds_z, np.where(inds_z >= np.max(inds_z) - pert)),  # max_z
-                     ])
+                     ], dtype=np.int8)
 
 
 def get_bbox(mask, points=None, pad=0, zero_pad=False):
@@ -100,7 +100,7 @@ def update_bbox(bbox, seeds):
         y_min = int(np.min(points[2]))
         y_max = int(np.max(points[2]))
 
-    return [z_min - 1, z_max + 1, x_min - 1, x_max + 1, y_min - 1, y_max + 1]
+    return [z_min, z_max, x_min, x_max, y_min, y_max]
 
 
 def crop_image(image, bbox):
@@ -114,6 +114,12 @@ def crop_image(image, bbox):
                   ]
     return cropped_img
 
+
+def crop_depth(image, bbox):
+    cropped_img = image[
+        bbox[0]: bbox[1], :, :
+    ]
+    return cropped_img
 
 def zoom_img(img, size):
     """
@@ -139,6 +145,12 @@ def extend_points(seed):
 
 def extend_points2(seed):
     points = binary_dilation(seed)
+    return points.astype(np.uint8)
+
+
+def extend_points3(seed):
+    struct = generate_binary_structure(3, 2)
+    points = binary_dilation(seed, struct)
     return points.astype(np.uint8)
 
 

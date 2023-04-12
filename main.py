@@ -6,11 +6,14 @@ import os.path
 
 import sys
 
+import cv2
 import maxflow
+import scipy.interpolate
 
 from MyDialog import Ui_Dialog  # 导入GUI文件
 from miis import *  # 嵌入了matplotlib的文件
 from PyQt5.QtCore import QPoint
+from PyQt5.QtGui import QPainter, QColor, QPen
 from pathlib import Path
 import nibabel as nib
 import numpy as np
@@ -19,6 +22,7 @@ import pyqtgraph as pg
 from scipy import ndimage
 from utils import *
 import time
+import imcut.pycut
 
 
 class MainDialogImgBW(QDialog, Ui_Dialog):
@@ -49,7 +53,8 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
         self.pushButton.clicked.connect(self.openImage)
         self.pushButton_2.clicked.connect(self.openMask)
         self.pushButton_3.clicked.connect(self.refine)
-        self.pushButton_4.clicked.connect(self.saveMask)
+        self.pushButton_4.clicked.connect(self.save_mask)
+        self.pushButton_5.clicked.connect(self.graph_cut)
         self.horizontalSlider.valueChanged.connect(self.bindSlider)
         self.horizontalSlider.valueChanged.connect(self.bindSpineBox)
         self.spinBox.valueChanged.connect(self.sliderChange)
@@ -57,6 +62,7 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
         self.radioButton_2.clicked.connect(self.bindradiobutton)
 
         self.F.figure.canvas.mpl_connect('button_press_event', self.on_mouse_click)
+        self.F.figure.canvas.mpl_connect('motion_notify_event', self.on_motion_notify)
 
         self.fgSeed = []
         self.bgSeed = []
@@ -75,26 +81,16 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
                 self.bgSeed.append([int(self.z), int(x), int(y)])
                 self.showimage(self.z)
 
-
+    def on_motion_notify(self, event):
+        if event.inaxes and event.button == 1 and not np.any(self.mask):
+            x, y = event.xdata, event.ydata
+            self.fgSeed.append([int(self.z), int(x), int(y)])
+            self.showimage(self.z)
 
     def showimage(self, slice_idx):
         self.z = slice_idx
-        # image_nii = sitk.ReadImage(Path(self.nii_path))
-        # image = sitk.GetArrayFromImage(image_nii)
-        # image = np.asarray(image, np.float32)
-        # rawSpacing = image_nii.GetSpacing()
-        # self.spacing = [rawSpacing[2], rawSpacing[1], rawSpacing[0]]
         image = self.image
         self.horizontalSlider.setRange(0, image.shape[0] - 1)
-        # if not self.mask_path == '':
-        #     # data_mask = nib.load(Path(self.mask_path))
-        #     # data2 = data_mask.get_fdata()
-        #     # data2 = np.rot90(data2)
-        #     mask_nii = sitk.ReadImage(Path(self.mask_path))
-        #     mask = sitk.GetArrayFromImage(mask_nii)
-        #     mask = np.asarray(mask, np.float32)
-        #     mask = np.flip(mask)
-        #     self.mask = mask
         if self.mask is not None:
             mask = self.mask
         else:
@@ -152,10 +148,12 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
         self.horizontalSlider.setValue(self.spinBox.value())
 
     def openImage(self):
+        self.image = None
+        self.mask = None
         self.fgSeed.clear()
         self.bgSeed.clear()
         # self.mask = None
-        file_name = QFileDialog.getOpenFileName(None, "Open File", "./", "data(*.nii.gz;*.nii;*.dcm)")
+        file_name = QFileDialog.getOpenFileName(None, "Open File", "./", "data(*.nii.gz;*.nii;*.dcm;*.*)")
         self.nii_path = file_name[0]
         slice_idx = self.horizontalSlider.value()
         if file_name[0].split('.')[1] == 'nii':
@@ -174,6 +172,7 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
         self.showimage(slice_idx)
 
     def openMask(self):
+        self.mask = None
         file_name = QFileDialog.getOpenFileName(None, "Open File", "./", "data(*.nii.gz;*.nii;*.dcm)")
         self.mask_path = file_name[0]
         mask_nii = sitk.ReadImage(Path(self.mask_path))
@@ -182,52 +181,38 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
         # mask = np.flip(mask)
         self.mask = mask
 
-    def simple_refine(self):
+    def graph_cut(self):
         fore_seeds = np.zeros_like(self.image)
         for i1 in self.fgSeed:
-            fore_seeds[i1[0], i1[1], i1[2]] = 1
+            fore_seeds[i1[0], i1[2], i1[1]] = 1
         back_seeds = np.zeros_like(self.image)
         for i2 in self.bgSeed:
-            back_seeds[i2[0], i2[1], i2[2]] = 1
+            back_seeds[i2[0], i2[2], i2[1]] = 1
 
-        fore_seeds = extend_points(fore_seeds)
-        back_seeds = extend_points(back_seeds)
-        all_refined_seeds = np.maximum(fore_seeds, back_seeds)
+        fore_seeds = extend_points2(fore_seeds)
+        back_seeds = extend_points2(back_seeds)
 
-        bbox = get_bbox(self.mask)
-        bbox = update_bbox(bbox, all_refined_seeds)
-        cropped_img = crop_image(self.image, bbox)
-        init_seg = [self.mask, 1.0 - self.mask]
-        fg_prob = init_seg[0]
-        bg_prob = init_seg[1]
+        all_seeds = np.zeros_like(self.image)
+        all_seeds[fore_seeds == 1] = 1
+        all_seeds[back_seeds == 1] = 2
+        bbox = get_bbox(all_seeds, pad=3)
 
-        cropped_fore_seg = crop_image(fg_prob, bbox)
-        cropped_back_seg = crop_image(bg_prob, bbox)
-        cropped_fore_seeds = crop_image(fore_seeds, bbox)
-        cropped_back_seeds = crop_image(back_seeds, bbox)
+        img = itensity_standardization(self.image)
+        cropped_img = crop_image(img, bbox)
+        cropped_seeds = crop_image(all_seeds, bbox)
 
-        Prob = np.asarray([cropped_back_seg, cropped_fore_seg])
-        Prob = np.transpose(Prob, [1, 2, 3, 0])
+        gc = imcut.pycut.ImageGraphCut(cropped_img)
+        gc.set_seeds(cropped_seeds)
+        gc.run()
 
-        crf_seeds = np.zeros_like(cropped_fore_seeds, np.uint8)
-        crf_seeds[cropped_fore_seeds > 0] = 170
-        crf_seeds[cropped_back_seeds > 0] = 255
-        crf_param = (10.0, 15.0)
-        Seed = np.asarray([crf_seeds == 255, crf_seeds == 170], np.uint8)
-        Seed = np.transpose(Seed, [1, 2, 3, 0])
-
-        refine_pred = maxflow.interactive_maxflow3d(cropped_img, Prob, Seed, crf_param)
         pred = np.zeros_like(self.image, dtype=np.float32)
-        pred[bbox[0]:bbox[1], bbox[2]:bbox[3], bbox[4]:bbox[5]] = refine_pred
+        pred[bbox[0]:bbox[1], bbox[2]:bbox[3], bbox[4]:bbox[5]] = 1 - gc.segmentation
 
-        strt = ndimage.generate_binary_structure(3, 1)
+        strt = ndimage.generate_binary_structure(3, 2)
         seg = np.asarray(ndimage.binary_opening(pred, strt), np.uint8)
         seg = np.asarray(ndimage.binary_closing(seg, strt), np.uint8)
         seg = connected_component(seg)
         seg = ndimage.binary_fill_holes(seg)
-
-        seg = np.clip(seg, 0, 255)
-        seg = np.asarray(seg, np.uint8)
 
         self.mask = seg
         self.fgSeed.clear()
@@ -238,14 +223,12 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
         t00 = time.time()
         fore_seeds = np.zeros_like(self.image)
         for i1 in self.fgSeed:
-            fore_seeds[i1[0], i1[1], i1[2]] = 1
+            fore_seeds[i1[0], i1[2], i1[1]] = 1
         back_seeds = np.zeros_like(self.image)
         for i2 in self.bgSeed:
-            back_seeds[i2[0], i2[1], i2[2]] = 1
+            back_seeds[i2[0], i2[2], i2[1]] = 1
 
         t30 = time.time()
-        # fore_seeds = extend_points(fore_seeds)
-        # back_seeds = extend_points(back_seeds)
         fore_seeds = extend_points2(fore_seeds)
         back_seeds = extend_points2(back_seeds)
         t31 = time.time()
@@ -255,6 +238,10 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
 
         bbox = get_bbox(self.mask)
         bbox = update_bbox(bbox, all_refined_seeds)
+
+        if not np.any(self.mask):
+            self.mask[bbox[0]:bbox[1], bbox[2]:bbox[3], bbox[4]:bbox[5]] = 1
+
         cropped_img = crop_image(self.image, bbox)
 
         normal_img = itensity_standardization(cropped_img)
@@ -306,7 +293,7 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
         pred = np.zeros_like(self.image, dtype=np.float32)
         pred[bbox[0]:bbox[1], bbox[2]:bbox[3], bbox[4]:bbox[5]] = refine_pred
 
-        strt = ndimage.generate_binary_structure(3, 3)
+        strt = ndimage.generate_binary_structure(3, 2)
         seg = np.asarray(ndimage.binary_opening(pred, strt), np.uint8)
         seg = np.asarray(ndimage.binary_closing(seg, strt), np.uint8)
         seg = connected_component(seg)
@@ -322,8 +309,7 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
         print("runtime: {0:}".format(t01 - t00))
         self.showimage(self.z)
 
-
-    def saveMask(self):
+    def save_mask(self):
         file_name, tp = QFileDialog.getSaveFileName(None, "Save File", "./", "nii(*.nii.gz;*.nii)")
         mask = np.flip(self.mask)
         new_mask_nii = sitk.GetImageFromArray(mask)
