@@ -67,7 +67,14 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
         self.fgSeed = []
         self.bgSeed = []
         self.z = 0
+
+        self.rawSpacing = None
+        self.rawOrigin = None
+        self.rawDirection = None
+
+        # for cal geodesic distance
         self.spacing = None
+
 
     def on_mouse_click(self, event):
         if event.inaxes:
@@ -166,8 +173,10 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
             image_nii = reader.Execute()
         image = sitk.GetArrayFromImage(image_nii)
         self.image = np.asarray(image, np.float32)
-        rawSpacing = image_nii.GetSpacing()
-        self.spacing = [rawSpacing[2], rawSpacing[1], rawSpacing[0]]
+        self.rawSpacing = image_nii.GetSpacing()
+        self.rawDirection = image_nii.GetDirection()
+        self.rawOrigin = image_nii.GetOrigin()
+        self.spacing = [self.rawSpacing[2], self.rawSpacing[1], self.rawSpacing[0]]
         # self.image = np.flip(self.image)
         self.showimage(slice_idx)
 
@@ -311,8 +320,11 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
 
     def save_mask(self):
         file_name, tp = QFileDialog.getSaveFileName(None, "Save File", "./", "nii(*.nii.gz;*.nii)")
-        mask = np.flip(self.mask)
-        new_mask_nii = sitk.GetImageFromArray(mask)
+        # mask = np.flip(self.mask)
+        new_mask_nii = sitk.GetImageFromArray(self.mask)
+        new_mask_nii.SetOrigin(self.rawOrigin)
+        new_mask_nii.SetSpacing(self.rawSpacing)
+        new_mask_nii.SetDirection(self.rawDirection)
         sitk.WriteImage(new_mask_nii, file_name)
 
 
