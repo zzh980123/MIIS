@@ -110,19 +110,14 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
         ax.imshow(image[slice_idx, :, :], cmap='gray')
         # 将mask的矩阵转换，未勾画区为透明的，勾画区为红色
         if self.check == 1:
-            array1 = list(mask[slice_idx, :, :])
-            a = len(array1)
-            b = len(array1[0])
-            pic = [[0] * b for i in range(a)]
-            for i in range(0, a):
-                for j in range(0, b):
-                    if array1[i][j] == 0:
-                        pic[i][j] = [0, 0, 0, 0]
-                    else:
-                        pic[i][j] = [255, 0, 0, 100]
+            _, a, b = mask.shape
+
+            pic = np.zeros((a, b, 4), dtype=np.uint8)
+            pic[mask[slice_idx] == 1] = [255, 0, 0, 100]
 
             ax.imshow(pic, cmap='viridis')
 
+            del pic
             for fg in self.fgSeed:
                 if fg[0] == slice_idx:
                     ax.plot(fg[1], fg[2], 'o', markersize=3, color='green')
@@ -130,9 +125,6 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
             for bg in self.bgSeed:
                 if bg[0] == slice_idx:
                     ax.plot(bg[1], bg[2], 'o', markersize=3, color='blue')
-
-            del array1
-            del pic
 
         fig.canvas.draw()
 
@@ -173,6 +165,7 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
             image_nii = reader.Execute()
         image = sitk.GetArrayFromImage(image_nii)
         self.image = np.asarray(image, np.float32)
+        # self.image = 255 * max_min_normalize(self.image)
         self.rawSpacing = image_nii.GetSpacing()
         self.rawDirection = image_nii.GetDirection()
         self.rawOrigin = image_nii.GetOrigin()
@@ -189,6 +182,7 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
         mask = np.asarray(mask, np.float32)
         # mask = np.flip(mask)
         self.mask = mask
+        self.showimage(self.z)
 
     def graph_cut(self):
         fore_seeds = np.zeros_like(self.image)
@@ -239,7 +233,8 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
 
         t30 = time.time()
         fore_seeds = extend_points2(fore_seeds)
-        back_seeds = extend_points2(back_seeds)
+        # back_seeds = extend_points2(back_seeds)
+        back_seeds = back_seeds.astype(np.uint8)
         t31 = time.time()
         print("runtime extend points: {0:}".format(t31 - t30))
 
