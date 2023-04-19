@@ -29,7 +29,7 @@ class MainDialogImgBW(QDialog, Ui_Dialog):
     def __init__(self):
         super(MainDialogImgBW, self).__init__()
         self.setupUi(self)
-        self.setWindowTitle("显示nii图像")
+        self.setWindowTitle("MIIS")
         self.setMinimumSize(0, 0)
 
         # 创建存放nii文件路径的属性
